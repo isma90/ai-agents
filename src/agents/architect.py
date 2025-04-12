@@ -1,76 +1,85 @@
 # src/agents/architect.py
-
-import openai
-import os
-from datetime import datetime
 from typing import List
-from dataclasses import dataclass
+from core.agent import Agent
+from core.config import AgentConfig
 
-@dataclass
-class ArchitectConfig:
-    model: str = "text-davinci-003"
-    verbose: bool = True
-    prompt_path: str = "src/prompts/architect.txt"
-    output_dir: str = "src/outputs"
-
-class Architect:
-    def __init__(self, nombre="Arquitecto", api_key=None, config: ArchitectConfig = ArchitectConfig()):
-        self.nombre = nombre
-        self.api_key = api_key
-        self.config = config
-        openai.api_key = self.api_key
-        os.makedirs(self.config.output_dir, exist_ok=True)
-
-    def __str__(self):
-        return f"{self.nombre}: Diseñador de soluciones técnicas"
-
-    def _cargar_prompt(self, requerimientos: List[str]) -> str:
+class Architect(Agent):
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.assistant = None
+        if self.client:
+            self.assistant = self._create_or_get_assistant()
+    
+    def _create_or_get_assistant(self):
+        # Crea un nuevo asistente con las instrucciones del prompt
         with open(self.config.prompt_path, "r", encoding="utf-8") as f:
-            template = f.read()
-        lista = "\n".join(f"- {r}" for r in requerimientos)
-        return template.replace("{{requerimientos}}", lista)
-
-    def _guardar_resultado(self, resultado: str) -> str:
-        archivos = os.listdir(self.config.output_dir)
-        ids = [
-            int(f.replace("architect-id-", "").replace(".txt", ""))
-            for f in archivos
-            if f.startswith("architect-id-") and f.endswith(".txt") and f.replace("architect-id-", "").replace(".txt", "").isdigit()
-        ]
-        next_id = max(ids) + 1 if ids else 1
-
-        filename = f"architect-id-{next_id}.txt"
-        filepath = os.path.join(self.config.output_dir, filename)
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(resultado)
-
-        if self.config.verbose:
-            print(f"[{self.nombre}] 📝 Solución técnica guardada en {filepath}")
+            instructions = f.read()
         
-        return filepath
-
-    def diseñar_solucion(self, requerimientos: List[str]) -> str:
-        if self.config.verbose:
-            print(f"[{self.nombre}] Diseñando solución técnica...")
-
-        prompt = self._cargar_prompt(requerimientos)
-
-        try:
-            response = openai.Completion.create(
+        # Lista los asistentes existentes
+        assistants = self.client.beta.assistants.list()
+        existing_assistant = next((a for a in assistants.data if a.name == self.config.name), None)
+        
+        if existing_assistant:
+            return existing_assistant
+        else:
+            return self.client.beta.assistants.create(
+                name=self.config.name,
+                description="Diseñador de soluciones técnicas",
                 model=self.config.model,
-                prompt=prompt,
-                max_tokens=800,
-                n=1,
-                stop=None,
-                temperature=0.5
+                instructions=instructions
             )
-        except Exception as e:
-            print(f"[{self.nombre}] ❌ Error al comunicarse con OpenAI: {e}")
-            return ""
-
-        resultado = response.choices[0].text.strip()
-
-        print(f"[{self.nombre}] ✅ Solución generada.")
-        self._guardar_resultado(resultado)
-        return resultado
+    
+    def run(self, descripcion_general: str) -> List[str]:
+        iteration_id = self._generate_iteration_id()
+        
+        # Crear un nuevo thread para esta conversación
+        thread = self.client.beta.threads.create()
+        
+        # Agregar mensaje al thread
+        self.client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=descripcion_general
+        )
+        
+        # Ejecutar el asistente en este thread
+        run = self.client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=self.assistant.id
+        )
+        
+        # Esperar a que termine la ejecución
+        while run.status in ["queued", "in_progress"]:
+            run = self.client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
+        
+        # Obtener los mensajes resultantes
+        messages = self.client.beta.threads.messages.list(
+            thread_id=thread.id
+        )
+        
+        # Extraer el contenido del último mensaje (respuesta del asistente)
+        assistant_messages = [
+            msg for msg in messages.data 
+            if msg.role == "assistant"
+        ]
+        
+        if assistant_messages:
+            latest_message = assistant_messages[0]
+            content_parts = [
+                part.text.value for part in latest_message.content 
+                if hasattr(part, "text") and hasattr(part.text, "value")
+            ]
+            texto = "\n".join(content_parts)
+            
+            # Guardar la salida
+            self._save_output(texto, iteration_id)
+            
+            return [r.strip() for r in texto.split("\n") if r.strip()]
+        
+        return []
+    
+    def __str__(self):
+        return f"{self.config.name}: Diseñador de soluciones técnicas"

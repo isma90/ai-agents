@@ -1,105 +1,85 @@
-import openai
-import os
-from datetime import datetime
+# src/agents/developer.py
+from typing import List
+from core.agent import Agent
+from core.config import AgentConfig
 
-class DeveloperConfig:
-    def __init__(self, model="text-davinci-003", verbose=True):
-        self.model = model
-        self.verbose = verbose
-
-
-class Developer:
-    def __init__(self, api_key: str, config: DeveloperConfig = DeveloperConfig()):
-        """
-        Inicializa el agente Developer con una clave API y la configuración para el modelo de OpenAI.
-        El agente se encarga de generar las actividades de desarrollo y generar el código base para el backend y frontend.
-        """
-        self.api_key = api_key
-        self.config = config
-        openai.api_key = self.api_key
-        self.nombre = "Developer"
-        self.descripcion_rol = (
-            "Eres un desarrollador experto que transforma las soluciones técnicas en código funcional "
-            "y estructurado utilizando tecnologías modernas como TypeScript, NestJS, ReactJS, MaterialUI y TypeORM."
-        )
-
-    def __str__(self):
-        """
-        Devuelve una breve descripción del rol y el nombre del agente.
-        """
-        return f"{self.nombre}: {self.descripcion_rol}"
-
-    def cargar_prompt(self, archivo_prompt: str) -> str:
-        """
-        Carga el contenido del prompt desde un archivo de texto.
-        """
-        with open(archivo_prompt, "r") as file:
-            prompt = file.read()
-        return prompt
-
-    def definir_tareas(self, solucion_tecnica: str, archivo_prompt: str) -> list[str]:
-        """
-        Analiza la solución técnica y genera una lista detallada de tareas de desarrollo usando el prompt desde un archivo.
-        """
-        prompt = self.cargar_prompt(archivo_prompt)
-        prompt = prompt.replace("{{solucion_tecnica}}", solucion_tecnica)
+class Developer(Agent):
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.assistant = None
+        if self.client:
+            self.assistant = self._create_or_get_assistant()
+    
+    def _create_or_get_assistant(self):
+        # Crea un nuevo asistente con las instrucciones del prompt
+        with open(self.config.prompt_path, "r", encoding="utf-8") as f:
+            instructions = f.read()
         
-        response = openai.Completion.create(
-            model=self.config.model,
-            prompt=prompt,
-            max_tokens=500,
-            n=1,
-            stop=None,
-            temperature=0.5
+        # Lista los asistentes existentes
+        assistants = self.client.beta.assistants.list()
+        existing_assistant = next((a for a in assistants.data if a.name == self.config.name), None)
+        
+        if existing_assistant:
+            return existing_assistant
+        else:
+            return self.client.beta.assistants.create(
+                name=self.config.name,
+                description="Desarrollador de código",
+                model=self.config.model,
+                instructions=instructions
+            )
+    
+    def run(self, descripcion_general: str) -> List[str]:
+        iteration_id = self._generate_iteration_id()
+        
+        # Crear un nuevo thread para esta conversación
+        thread = self.client.beta.threads.create()
+        
+        # Agregar mensaje al thread
+        self.client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=descripcion_general
         )
         
-        tareas_texto = response.choices[0].text.strip()
-        tareas = tareas_texto.split("\n")
-        tareas = [tarea.strip() for tarea in tareas if tarea.strip()]
-        
-        return tareas
-
-    def generar_codigo(self, tareas: list[str], archivo_prompt: str) -> str:
-        """
-        A partir de las tareas, genera el código base para el proyecto backend y frontend usando el prompt desde un archivo.
-        """
-        prompt = self.cargar_prompt(archivo_prompt)
-        prompt = prompt.replace("{{tareas}}", "\n".join(tareas))
-        
-        response = openai.Completion.create(
-            model=self.config.model,
-            prompt=prompt,
-            max_tokens=1000,
-            n=1,
-            stop=None,
-            temperature=0.5
+        # Ejecutar el asistente en este thread
+        run = self.client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=self.assistant.id
         )
         
-        return response.choices[0].text.strip()
-
-    def guardar_resultados(self, tareas: list[str], codigo: str) -> str:
-        """
-        Guarda las tareas de desarrollo y el código generado en un archivo con nombre versionado.
-        """
-        timestamp = datetime.now().strftime("%d%m%Y-%H%M%S")
-        filename = f"developer-iteracion-{timestamp}.txt"
+        # Esperar a que termine la ejecución
+        while run.status in ["queued", "in_progress"]:
+            run = self.client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
         
-        with open(filename, "w") as f:
-            f.write("Tareas de Desarrollo:\n")
-            for tarea in tareas:
-                f.write(f"- {tarea}\n")
+        # Obtener los mensajes resultantes
+        messages = self.client.beta.threads.messages.list(
+            thread_id=thread.id
+        )
+        
+        # Extraer el contenido del último mensaje (respuesta del asistente)
+        assistant_messages = [
+            msg for msg in messages.data 
+            if msg.role == "assistant"
+        ]
+        
+        if assistant_messages:
+            latest_message = assistant_messages[0]
+            content_parts = [
+                part.text.value for part in latest_message.content 
+                if hasattr(part, "text") and hasattr(part.text, "value")
+            ]
+            texto = "\n".join(content_parts)
             
-            f.write("\nCódigo Generado:\n")
-            f.write(codigo)
+            # Guardar la salida
+            self._save_output(texto, iteration_id)
+            
+            return [r.strip() for r in texto.split("\n") if r.strip()]
         
-        return filename
-
-    def procesar_solucion(self, solucion_tecnica: str, archivo_prompt: str) -> str:
-        """
-        Procesa la solución técnica, generando tareas y el código base para el proyecto.
-        """
-        tareas = self.definir_tareas(solucion_tecnica, archivo_prompt)
-        codigo = self.generar_codigo(tareas, archivo_prompt)
-        filename = self.guardar_resultados(tareas, codigo)
-        
-        return filename
+        return []
+    
+    def __str__(self):
+        return f"{self.config.name}: Desarrollador"

@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-  "openai>=0.27.0",
+  "openai>=1.72.0",
+  "openai-agents>=0.0.9",
   "python-dotenv>=1.0.0",
-  "swarm @ git+https://github.com/openai/swarm.git",
 ]

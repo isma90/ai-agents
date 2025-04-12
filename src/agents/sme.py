@@ -1,83 +1,85 @@
 # src/agents/sme.py
-
-import openai
-import os
-from datetime import datetime
 from typing import List
-from dataclasses import dataclass
+from core.agent import Agent
+from core.config import AgentConfig
 
-@dataclass
-class SMEConfig:
-    model: str = "text-davinci-003"
-    verbose: bool = True
-    prompt_path: str = "src/prompts/sme.txt"
-    output_dir: str = "src/outputs"
-
-class SME:
-    def __init__(self, nombre="SME", api_key=None, config: SMEConfig = SMEConfig()):
-        self.nombre = nombre
-        self.api_key = api_key
-        self.config = config
-        openai.api_key = self.api_key
-        os.makedirs(self.config.output_dir, exist_ok=True)
-
-    def __str__(self):
-        return f"{self.nombre}: Generador de requerimientos funcionales"
-
-    def _cargar_prompt(self, descripcion_general: str) -> str:
+class SME(Agent):
+    def __init__(self, config: AgentConfig):
+        super().__init__(config)
+        self.assistant = None
+        if self.client:
+            self.assistant = self._create_or_get_assistant()
+    
+    def _create_or_get_assistant(self):
+        # Crea un nuevo asistente con las instrucciones del prompt
         with open(self.config.prompt_path, "r", encoding="utf-8") as f:
-            template = f.read()
-        return template.replace("{{descripcion}}", descripcion_general)
-
-    def _guardar_resultado(self, requerimientos: List[str]) -> str:
-        # Obtener el próximo ID de archivo
-        existing_files = os.listdir(self.config.output_dir)
-        ids = [
-            int(f.replace("sme-id-", "").replace(".txt", ""))
-            for f in existing_files
-            if f.startswith("sme-id-") and f.endswith(".txt") and f.replace("sme-id-", "").replace(".txt", "").isdigit()
-        ]
-        next_id = max(ids) + 1 if ids else 1
-
-        filename = f"sme-id-{next_id}.txt"
-        filepath = os.path.join(self.config.output_dir, filename)
+            instructions = f.read()
         
-        with open(filepath, "w", encoding="utf-8") as f:
-            for r in requerimientos:
-                f.write(f"- {r}\n")
+        # Lista los asistentes existentes
+        assistants = self.client.beta.assistants.list()
+        existing_assistant = next((a for a in assistants.data if a.name == self.config.name), None)
         
-        if self.config.verbose:
-            print(f"[{self.nombre}] 📝 Requerimientos guardados en {filepath}")
-        
-        return filepath
-
-
-    def analizar_necesidad(self, descripcion_general: str) -> List[str]:
-        if self.config.verbose:
-            print(f"[{self.nombre}] Analizando: '{descripcion_general}'")
-
-        prompt = self._cargar_prompt(descripcion_general)
-
-        try:
-            response = openai.Completion.create(
+        if existing_assistant:
+            return existing_assistant
+        else:
+            return self.client.beta.assistants.create(
+                name=self.config.name,
+                description="Generador de requerimientos funcionales",
                 model=self.config.model,
-                prompt=prompt,
-                max_tokens=300,
-                n=1,
-                stop=None,
-                temperature=0.5
+                instructions=instructions
             )
-        except Exception as e:
-            print(f"[{self.nombre}] ❌ Error al comunicarse con OpenAI: {e}")
-            return []
-
-        texto = response.choices[0].text.strip()
-        requerimientos = [line.strip("-• ") for line in texto.split("\n") if line.strip()]
-
-        if self.config.verbose:
-            print(f"[{self.nombre}] ✅ Requerimientos generados:")
-            for r in requerimientos:
-                print(f"  - {r}")
-
-        self._guardar_resultado(requerimientos)
-        return requerimientos
+    
+    def run(self, descripcion_general: str) -> List[str]:
+        iteration_id = self._generate_iteration_id()
+        
+        # Crear un nuevo thread para esta conversación
+        thread = self.client.beta.threads.create()
+        
+        # Agregar mensaje al thread
+        self.client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=descripcion_general
+        )
+        
+        # Ejecutar el asistente en este thread
+        run = self.client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=self.assistant.id
+        )
+        
+        # Esperar a que termine la ejecución
+        while run.status in ["queued", "in_progress"]:
+            run = self.client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
+        
+        # Obtener los mensajes resultantes
+        messages = self.client.beta.threads.messages.list(
+            thread_id=thread.id
+        )
+        
+        # Extraer el contenido del último mensaje (respuesta del asistente)
+        assistant_messages = [
+            msg for msg in messages.data 
+            if msg.role == "assistant"
+        ]
+        
+        if assistant_messages:
+            latest_message = assistant_messages[0]
+            content_parts = [
+                part.text.value for part in latest_message.content 
+                if hasattr(part, "text") and hasattr(part.text, "value")
+            ]
+            texto = "\n".join(content_parts)
+            
+            # Guardar la salida
+            self._save_output(texto, iteration_id)
+            
+            return [r.strip() for r in texto.split("\n") if r.strip()]
+        
+        return []
+    
+    def __str__(self):
+        return f"{self.config.name}: Generador de requerimientos funcionales"
