@@ -5,14 +5,28 @@ from pathlib import Path
 import os
 from core.config import AgentConfig
 from openai import OpenAI
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 class Agent(ABC):
     def __init__(self, config: AgentConfig):
         self.config = config
         self.prompt_template = self._load_prompt(self.config.prompt_path)
         self.client = None
+        
+        # Inicializar cliente según el proveedor
         if config.provider == "openai":
             self.client = OpenAI(api_key=config.api_key)
+        elif config.provider == "anthropic":
+            if not ANTHROPIC_AVAILABLE:
+                raise ImportError(
+                    "El paquete 'anthropic' no está instalado. "
+                    "Instálalo con 'pip install anthropic' para usar el proveedor Anthropic."
+                )
+            self.client = Anthropic(api_key=config.api_key)
         
     def _load_prompt(self, path: str) -> str:
         if not Path(path).exists():

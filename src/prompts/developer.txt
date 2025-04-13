@@ -26,12 +26,9 @@ Tu objetivo es el siguiente:
 
 ### 📦 Instrucciones específicas de implementación:
 
-- **Estructura del código**: El código debe estar organizado por módulos. Si es necesario, separa por carpetas como `auth/`, `users/`, `services/`, `components/`, etc.
-- **Salidas**: Genera los archivos con sus respectivos nombres claramente indicados, por ejemplo:
+- **Estructura del código**: El código debe estar organizado por módulos siguiendo buenas practicas de desarrollo.
+- **Salidas**: Genera los archivos con sus respectivos nombres claramente indicados siguiendo todas las buenas practicas para cada una de las tecnologias utilizadas en frontend y backend.
+debe mantenerse el frontned desarrollado en su carpeta especifica separado del backend. el desarrollo debe ser completo y totalmente funcional, que pueda llegar y ejecutarse sin errores.
 
-archivo: backend/src/users/users.module.ts
-<contenido del archivo>
-archivo: frontend/src/components/UserForm.tsx
-<contenido del archivo>
  
 - **Base de datos**: Modela con TypeORM, incluye relaciones como `@OneToMany`, `@ManyToOne`, etc. según corresponda.
