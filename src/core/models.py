@@ -1,24 +1,25 @@
 # src/core/models.py
 from typing import List, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 import re
 
 
 class FunctionalRequirement(BaseModel):
     """Modelo para un requerimiento funcional estandarizado."""
-    id: str = Field(..., description="Identificador único del requerimiento (ej: REQ-01)")
-    description: str = Field(..., description="Descripción detallada del requerimiento")
-    priority: Optional[str] = Field("Media", description="Prioridad del requerimiento: Alta, Media, Baja")
-    status: Optional[str] = Field("Pendiente", description="Estado del requerimiento: Pendiente, Parcial, Completo")
+    id: str = Field(description="Identificador único del requerimiento (ej: REQ-01)")
+    description: str = Field(description="Descripción detallada del requerimiento")
+    priority: Optional[str] = Field(default="Media", description="Prioridad del requerimiento: Alta, Media, Baja")
+    status: Optional[str] = Field(default="Pendiente",
+                                  description="Estado del requerimiento: Pendiente, Parcial, Completo")
 
-    @validator('id')
+    @field_validator('id')
     def validate_id_format(cls, v):
         """Valida que el ID tenga el formato correcto."""
         if not re.match(r'^REQ-\d{2,}$', v):
             raise ValueError('El ID debe tener el formato REQ-XX donde XX son números (ej: REQ-01)')
         return v
 
-    @validator('priority')
+    @field_validator('priority')
     def validate_priority(cls, v):
         """Valida que la prioridad tenga un valor permitido."""
         valid_priorities = ["Alta", "Media", "Baja"]
@@ -26,7 +27,7 @@ class FunctionalRequirement(BaseModel):
             raise ValueError(f'La prioridad debe ser una de: {", ".join(valid_priorities)}')
         return v
 
-    @validator('status')
+    @field_validator('status')
     def validate_status(cls, v):
         """Valida que el estado tenga un valor permitido."""
         valid_statuses = ["Pendiente", "Parcial", "Completo"]
@@ -71,7 +72,19 @@ class FunctionalRequirement(BaseModel):
 
 class RequirementsList(BaseModel):
     """Modelo para una lista de requerimientos funcionales."""
-    requirements: List[FunctionalRequirement] = Field(default_factory=list)
+    # Versión 1: Implementación compatible con Pydantic v2
+    requirements: List[FunctionalRequirement] = None
+
+    # Configuración del modelo
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Inicializar requirements como lista vacía si es None
+        if self.requirements is None:
+            self.requirements = []
 
     def add_requirement(self, requirement: FunctionalRequirement):
         self.requirements.append(requirement)
@@ -101,9 +114,9 @@ class RequirementsList(BaseModel):
         """
         Crea un objeto RequirementsList a partir de una lista de cadenas de texto.
         """
-        requirements_list = cls()
+        instance = cls()
         for req_string in requirements_strings:
             if req_string.strip():  # Solo procesa líneas no vacías
                 req = FunctionalRequirement.from_string(req_string)
-                requirements_list.add_requirement(req)
-        return requirements_list
+                instance.add_requirement(req)
+        return instance
